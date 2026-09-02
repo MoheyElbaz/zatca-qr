@@ -1,114 +1,81 @@
 <div align="center">
-  <h1>
-  ZATCA-QR
-  <br/>
-  </h1>
+  <h1>ZATCA-QR (PHP)</h1>
+  <p>Saudi Arabia ZATCA e-invoicing (Fatoora) toolkit in PHP — Phase 1 TLV QR codes, and Phase 2 EGS onboarding, invoice signing and reporting.</p>
   <p>
-    An implementation of Saudi Arabia ZATCA's E-Invoicing requirements, processes, and standards in PHP. <br/>
-  </p>
-  Read the <a href="/docs">documentation PDFs</a> or <a href="https://zatca.gov.sa/en/E-Invoicing/SystemsDevelopers/Pages/TechnicalRequirementsSpec.aspx">Systems Developers</a> for more details.
-  <br/>
-  <br/>
-  <p>
-
-[![GitHub license](https://badgen.net/github/license/wes4m/zatca-xml-js?v=0.1.0)](https://github.com/wes4m/zatca-xml-js/blob/main/LICENSE)
-<a href="https://github.com/nadyshalaby">
-<img src="https://img.shields.io/badge/maintainer-nadyshalaby-blue"/>
-</a>
+    <a href="https://github.com/MoheyElbaz/zatca-qr/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
+    <img src="https://img.shields.io/badge/PHP-%E2%89%A58.1-777bb3" alt="PHP >= 8.1">
+    <img src="https://img.shields.io/badge/ZATCA-Phase%201%20%2B%202-0f766e" alt="ZATCA Phase 1 + 2">
   </p>
 </div>
 
-# Dependencies
+## Attribution — النسبة
 
-If you plan on using the built in `EGS` module to generate keys, and CSR. The `EGS` module in the package is dependent
-on <a href="https://www.openssl.org">OpenSSL</a> being installed in the system it's running on. It's being used to
-generate an `ECDSA` key pair using the `secp256k1` curve. also to generate and sign a CSR.
+This repository is a maintained fork of the PHP port by **[Nady Shalaby](https://github.com/nadyshalaby)**, itself a port of the original TypeScript library **[wes4m/zatca-xml-js](https://github.com/wes4m/zatca-xml-js)**. Credit for the original design and the PHP port belongs to them; this fork adds packaging, documentation (including a practical Arabic Phase-2 guide), and fixes.
 
-All other parts of the package will work fine without `OpenSSL`. (meaning it supports react-native and other frameworks)
+هذا المستودع تفريعة مُصانة من نقل PHP للأستاذ نادي شلبي عن المكتبة الأصلية بلغة TypeScript لـ wes4m — الفضل في التصميم الأصلي والنقل لهما، وهذه التفريعة تضيف التغليف والتوثيق والإصلاحات.
 
-# Supports
+## What it does
 
-All tha main futures required to on-board a new EGS. Create, sign, and report a simplified tax invoice are currently
-supported.
+- **Phase 1**: build the Base64 **TLV** payload for simplified-invoice QR codes (seller, VAT number, timestamp, totals) and render the QR image.
+- **Phase 2**: **EGS onboarding** (secp256k1 keys, CSR, compliance → production CSIDs), simplified tax invoice **UBL creation, signing** (cryptographic stamp), **compliance checks and reporting** to the Fatoora APIs.
 
-- EGS (E-Invoice Generation System).
-  - Creation/on-boarding (Compliance and Production x.509 CSIDs).
-  - Cryptographic stamps generation.
-- Simplified Tax Invoice.
-  - Creation.
-  - Signing.
-  - Compliance checking.
-  - Reporting.
+## Requirements
 
-# Installation
+- PHP **8.1+** with `ext-dom`
+- The **`openssl` binary** available on the system (`shell_exec` is used for key/CSR generation in the EGS flow)
+- `endroid/qr-code` ^5.0 (installed by Composer)
 
-1. Download the package from github
-2. Run `composer update` or `composer install` to install dependencies.
-3. Run a local server to view the examples using `php -S localhost:8000`
-4. Open http://localhost:8000/phase-1.php in your browser.
-5. Open http://localhost:8000/phase-2.php in your browser.
-6. Download the ZATCA QR Reader App from Google Play Store. <a href="https://play.google.com/store/apps/details?id=com.posbankbh.einvoiceqrreader&pcampaignid=web_share">**Zatca QR ReaderApp**</a>
-7. Scan the QR code generated in the example.
+## Install
 
-# Usage
-
-View full example at <a href="/phase-1.php">phase-1.php</a> and <a href="/phase-2.php">phase-2.php</a>.
-
-```php
-// New Invoice and EGS Unit
-$egs = new \ZATCA\EGS($egsUnit);
-
-$egs->production = false;
-
-// New Keys & CSR for the EGS
-list($privateKey, $csr) = $egs->generateNewKeysAndCSR('solution_name');
-
-// Issue a new compliance cert for the EGS
-list($requestId, $binarySecurityToken, $secret) = $egs->issueComplianceCertificate('123345', $csr);
-
-// Sign invoice
-list($signedInvoiceString, $invoiceHash, $qr) = $egs->signInvoice($invoice, $egsUnit, $binarySecurityToken, $privateKey);
-
-// Check invoice compliance
-echo($egs->checkInvoiceCompliance($signedInvoiceString, $invoiceHash, $binarySecurityToken, $secret));
-echo PHP_EOL;
+```bash
+composer require moheyelbaz/zatca-qr
 ```
 
-# Implementation
+Until the package is on Packagist, install from the repository:
 
-- General implementation (<a href="/docs/20220624_ZATCA_Electronic_Invoice_XML_Implementation_Standard_vF.pdf">More
-  details</a>)
-  - KSA Rules & Business
-  - UBL 2.1 Spec
-  - ISO EN16931
-  - UN/CEFACT Code List 1001
-  - ISO 3166
-  - ISO 4217:2015
-  - UN/CEFACT Code List 5305, D.16B
-- Security standards (<a href="/docs/20220624_ZATCA_Electronic_Invoice_Security_Features_Implementation_Standards.pdf">
-  More details</a>)
-  - NCA National Cryptographic Standards (NCS - 1 : 2020)
-  - NCDC Digital Signing Policy (Version 1.1: 2020)
-  - ETSI EN 319 102-1
-  - ETSI EN 319 132-1
-  - ETSI EN 319 142-1
-  - W3C XML-Signature Syntax and Processing
-  - ETSI EN 319 122-1
-  - IETF RFC 5035 (2007)
-  - RFC 5280
-  - ISO 32000-1
-  - IETF RFC 5652 (2009)
-  - RFP6749
-  - NIST SP 56A
+```json
+{
+  "repositories": [{ "type": "vcs", "url": "https://github.com/MoheyElbaz/zatca-qr" }],
+  "require": { "moheyelbaz/zatca-qr": "dev-main" }
+}
+```
 
-# Notice of Non-Affiliation and Disclaimer
+## Quick start — Phase 1 (QR only)
 
-`zatca-qr` is influenced by <a href="https://github.com/mudassaralichouhan/zatca-xml-php">`zatca-xml-php`</a> that not affiliated, associated, authorized, endorsed by, or in any way officially connected with ZATCA (
-Zakat, Tax and Customs Authority), or any of its subsidiaries or its affiliates. The official ZATCA website can be found
-at https://zatca.gov.sa.
+```php
+use ZATCA\GenerateQrCode;
+use ZATCA\Tags\{Seller, TaxNumber, InvoiceDate, InvoiceTotalAmount, InvoiceTaxAmount};
 
-# Contribution
+$base64TLV = GenerateQrCode::fromArray([
+    new Seller('اسم المنشأة'),
+    new TaxNumber('301121971500003'),
+    new InvoiceDate('2026-09-02T10:30:00Z'),
+    new InvoiceTotalAmount('115.00'),
+    new InvoiceTaxAmount('15.00'),
+])->toBase64();
+// Feed $base64TLV to any QR renderer (see phase-1.php for endroid/qr-code usage)
+```
 
-All contributions are appreciated.
+## Quick start — Phase 2 (onboarding, signing, reporting)
 
-I'm not planning on supporting `Tax Invoices` (Not simplified ones). If any one wants to tackle that part.
+See the runnable example in [`phase-2.php`](phase-2.php) and the **Arabic step-by-step guide in `docs/`**. The flow:
+
+1. Build the `EGS` unit info (VAT number, CRN, branch, location…)
+2. `generateNewKeysAndCSR()` → secp256k1 private key + CSR
+3. Compliance CSID (with the OTP from the Fatoora portal) → run compliance checks → Production CSID
+4. Create the invoice → `sign()` → report to ZATCA
+
+**Always start against the ZATCA sandbox/simulation environment before production.**
+
+## Disclaimer
+
+This is community software, not a ZATCA product. Validate your integration against ZATCA's official
+[developer documentation](https://zatca.gov.sa/en/E-Invoicing/SystemsDevelopers/Pages/default.aspx) and the compliance
+checks for your own EGS before going live. No warranty — see LICENSE.
+
+## Roadmap of this fork
+
+- Packagist release and semantic versioning
+- Practical Arabic documentation for Phase-2 scenarios (credit notes, cancellation, B2B standard invoices)
+- Replacing `shell_exec` openssl calls with `ext-openssl` where feasible
+- Tests for TLV output against ZATCA's published examples

@@ -1,10 +1,27 @@
 {
+    "name": "moheyelbaz/zatca-qr",
+    "description": "Saudi Arabia ZATCA e-invoicing (Fatoora) toolkit in PHP: Phase 1 TLV QR codes, and Phase 2 EGS onboarding, invoice signing and reporting. Maintained fork of Nady Shalaby's PHP port of wes4m/zatca-xml-js.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["zatca", "fatoora", "e-invoicing", "saudi-arabia", "qr-code", "tlv", "ubl", "vat", "phase-2"],
+    "homepage": "https://github.com/MoheyElbaz/zatca-qr",
+    "authors": [
+        { "name": "Mohey Elbaz", "role": "Maintainer of this fork" },
+        { "name": "Nady Shalaby", "role": "Author of the PHP port" },
+        { "name": "Wesam Alzahir (wes4m)", "role": "Author of the original zatca-xml-js" }
+    ],
     "require": {
+        "php": ">=8.1",
+        "ext-dom": "*",
         "endroid/qr-code": "^5.0"
+    },
+    "suggest": {
+        "ext-openssl": "Key/CSR generation shells out to the openssl binary; required for the EGS onboarding flow"
     },
     "autoload": {
         "psr-4": {
             "ZATCA\\": "ZATCA/"
         }
-    }
+    },
+    "minimum-stability": "stable"
 }
