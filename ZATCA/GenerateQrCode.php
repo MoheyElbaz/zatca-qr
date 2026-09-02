@@ -7,25 +7,34 @@ use InvalidArgumentException;
 class GenerateQrCode
 {
     /**
-     * @var Tag|Tag[] $data The data or list of tags
+     * @var Tag[] $data The list of tags
      */
     protected $data = [];
 
     /**
-     * @param  Tag|Tag[]  $data  The data or list of tags
+     * @param  Tag[]  $data  The list of tags
      *
      * @throws InvalidArgumentException If the TLV data structure
-     *         contains other data than arrays and Tag instances.
+     *         contains other data than Tag instances.
      */
-    private function __construct($data)
+    private function __construct(array $data)
     {
-        $this->data = array_filter($data, function ($tag) {
-            return $tag instanceof Tag;
-        });
-
-        if (\count($this->data) === 0) {
-            throw new InvalidArgumentException('malformed data structure');
+        foreach ($data as $index => $tag) {
+            if (!$tag instanceof Tag) {
+                throw new InvalidArgumentException(sprintf(
+                    'malformed data structure: entry %s is a %s, expected a %s instance.',
+                    (string) $index,
+                    get_debug_type($tag),
+                    Tag::class
+                ));
+            }
         }
+
+        if (count($data) === 0) {
+            throw new InvalidArgumentException('malformed data structure: no tags given.');
+        }
+
+        $this->data = $data;
     }
 
     /**

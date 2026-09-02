@@ -1,7 +1,5 @@
 <?php
 
-require ROOT_PATH . '/ZATCA/templates/invoice_billing_reference_template.php';
-
 /**
  * Maybe use a templating engine instead of str replace.
  * This works for now though
@@ -19,7 +17,7 @@ return /* XML */
     </ext:UBLExtensions>
     <cbc:ProfileID>reporting:1.0</cbc:ProfileID>
     <cbc:ID>SET_INVOICE_SERIAL_NUMBER</cbc:ID>
-    <cbc:UUID>SET_TERMINAL_UUID</cbc:UUID>
+    <cbc:UUID>SET_INVOICE_UUID</cbc:UUID>
     <cbc:IssueDate>SET_ISSUE_DATE</cbc:IssueDate>
     <cbc:IssueTime>SET_ISSUE_TIME</cbc:IssueTime>
     <cbc:InvoiceTypeCode name="0211010">SET_INVOICE_TYPE</cbc:InvoiceTypeCode>

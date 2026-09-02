@@ -3,6 +3,18 @@
 namespace ZATCA;
 
 use DOMDocument;
+use DOMElement;
+use InvalidArgumentException;
+use RuntimeException;
+use ZATCA\Tags\CertificateSignature;
+use ZATCA\Tags\DigitalSignature;
+use ZATCA\Tags\InvoiceDate;
+use ZATCA\Tags\InvoiceHash;
+use ZATCA\Tags\InvoiceTaxAmount;
+use ZATCA\Tags\InvoiceTotalAmount;
+use ZATCA\Tags\PublicKey;
+use ZATCA\Tags\Seller;
+use ZATCA\Tags\TaxNumber;
 
 class ZATCASimplifiedTaxInvoice
 {
@@ -16,49 +28,146 @@ class ZATCASimplifiedTaxInvoice
     {
     }
 
-    public function simplifiedTaxInvoice(array $invoice, array $egs_unit)
+    /**
+     * Absolute path of a template shipped with this package. Resolved from this file so
+     * that the library keeps working when installed into a `vendor/` directory.
+     */
+    private static function template(string $name): string
     {
-        $populated_template = require ROOT_PATH . '/ZATCA/templates/simplified_tax_invoice_template.php';
+        return __DIR__ . '/templates/' . $name;
+    }
 
-        $populated_template = str_replace('SET_INVOICE_TYPE', $this->ZATCAInvoiceTypes[$egs_unit['cancelation']['cancelation_type']], trim($populated_template));
+    /**
+     * Every caller supplied value ends up inside an XML document that is then
+     * cryptographically stamped, so it has to be escaped: an unescaped `&` breaks the
+     * document, and unescaped markup would be smuggled into the signed invoice.
+     */
+    private static function escape($value): string
+    {
+        return htmlspecialchars((string) ($value ?? ''), ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    }
 
-        // if canceled (BR-KSA-56) set reference number to canceled invoice
-        if (isset($egs_unit['cancelation']['canceled_invoice_number']) && $egs_unit['cancelation']['canceled_invoice_number']) {
-            $populated_template = str_replace('SET_BILLING_REFERENCE', $this->defaultBillingReference($egs_unit['cancelation']['canceled_invoice_number']), $populated_template);
-        } else {
-            $populated_template = str_replace('SET_BILLING_REFERENCE', '', $populated_template);
+    private static function assertKeys(array $source, array $keys, string $label): void
+    {
+        $missing = [];
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $source)) {
+                $missing[] = $key;
+            }
         }
 
-        $populated_template = str_replace('SET_INVOICE_SERIAL_NUMBER', $invoice['invoice_serial_number'], $populated_template);
-        $populated_template = str_replace('SET_TERMINAL_UUID', $egs_unit['uuid'], $populated_template);
-        $populated_template = str_replace('SET_ISSUE_DATE', $invoice['issue_date'], $populated_template);
-        $populated_template = str_replace('SET_ISSUE_TIME', $invoice['issue_time'], $populated_template);
-        $populated_template = str_replace('SET_PREVIOUS_INVOICE_HASH', $invoice['previous_invoice_hash'], $populated_template);
-        $populated_template = str_replace('SET_INVOICE_COUNTER_NUMBER', $invoice['invoice_counter_number'], $populated_template);
-        $populated_template = str_replace('SET_COMMERCIAL_REGISTRATION_NUMBER', $egs_unit['CRN_number'], $populated_template);
+        if ($missing) {
+            throw new InvalidArgumentException(sprintf(
+                '%s is missing the required key(s): %s.',
+                $label,
+                implode(', ', $missing)
+            ));
+        }
+    }
 
-        $populated_template = str_replace('SET_STREET_NAME', $egs_unit['location']['street'], $populated_template);
-        $populated_template = str_replace('SET_BUILDING_NUMBER', $egs_unit['location']['building'], $populated_template);
-        $populated_template = str_replace('SET_PLOT_IDENTIFICATION', $egs_unit['location']['plot_identification'], $populated_template);
-        $populated_template = str_replace('SET_CITY_SUBDIVISION', $egs_unit['location']['city_subdivision'], $populated_template);
-        $populated_template = str_replace('SET_CITY', $egs_unit['location']['city'], $populated_template);
-        $populated_template = str_replace('SET_POSTAL_NUMBER', $egs_unit['location']['postal_zone'], $populated_template);
+    private static function opensslErrors(): string
+    {
+        $errors = [];
+        while ($error = openssl_error_string()) {
+            $errors[] = $error;
+        }
 
-        $populated_template = str_replace('SET_VAT_NUMBER', $egs_unit['VAT_number'], $populated_template);
-        $populated_template = str_replace('SET_VAT_NAME', $egs_unit['VAT_name'], $populated_template);
+        return $errors ? implode('; ', $errors) : 'no OpenSSL error reported';
+    }
 
-        $parseLineItems = $this->parseLineItems($invoice['line_items']);
-        $populated_template = str_replace('PARSE_LINE_ITEMS', $parseLineItems, $populated_template);
+    public function simplifiedTaxInvoice(array $invoice, array $egs_unit): DOMDocument
+    {
+        self::assertKeys($invoice, [
+            'invoice_serial_number', 'issue_date', 'issue_time',
+            'previous_invoice_hash', 'invoice_counter_number', 'line_items',
+        ], 'The invoice');
+        self::assertKeys($egs_unit, [
+            'uuid', 'CRN_number', 'VAT_number', 'VAT_name', 'location',
+        ], 'The EGS unit');
+        self::assertKeys($egs_unit['location'], [
+            'street', 'building', 'plot_identification', 'city_subdivision', 'city', 'postal_zone',
+        ], 'The EGS unit location');
+
+        $cancelation = $egs_unit['cancelation'] ?? [];
+        $invoice_type = $cancelation['cancelation_type'] ?? 'INVOICE';
+
+        if (!isset($this->ZATCAInvoiceTypes[$invoice_type])) {
+            throw new InvalidArgumentException(sprintf(
+                'Unknown invoice type "%s". Expected one of: %s.',
+                (string) $invoice_type,
+                implode(', ', array_keys($this->ZATCAInvoiceTypes))
+            ));
+        }
+
+        // if canceled (BR-KSA-56) set reference number to canceled invoice
+        $billing_reference = '';
+        if (!empty($cancelation['canceled_invoice_number'])) {
+            $billing_reference = $this->defaultBillingReference($cancelation['canceled_invoice_number']);
+        }
+
+        $populated_template = trim(require self::template('simplified_tax_invoice_template.php'));
+
+        // strtr() replaces each placeholder exactly once and never re-scans what it just
+        // inserted, so a value that happens to contain a placeholder name is left alone.
+        $populated_template = strtr($populated_template, [
+            'SET_INVOICE_TYPE' => (string) $this->ZATCAInvoiceTypes[$invoice_type],
+            'SET_BILLING_REFERENCE' => $billing_reference,
+            'SET_INVOICE_SERIAL_NUMBER' => self::escape($invoice['invoice_serial_number']),
+            // KSA-1: every invoice carries its own UUID, not the terminal's.
+            'SET_INVOICE_UUID' => self::escape($invoice['uuid'] ?? $egs_unit['uuid']),
+            'SET_ISSUE_DATE' => self::escape($invoice['issue_date']),
+            'SET_ISSUE_TIME' => self::escape($invoice['issue_time']),
+            'SET_PREVIOUS_INVOICE_HASH' => self::escape($invoice['previous_invoice_hash']),
+            'SET_INVOICE_COUNTER_NUMBER' => self::escape($invoice['invoice_counter_number']),
+            'SET_COMMERCIAL_REGISTRATION_NUMBER' => self::escape($egs_unit['CRN_number']),
+            'SET_STREET_NAME' => self::escape($egs_unit['location']['street']),
+            'SET_BUILDING_NUMBER' => self::escape($egs_unit['location']['building']),
+            'SET_PLOT_IDENTIFICATION' => self::escape($egs_unit['location']['plot_identification']),
+            'SET_CITY_SUBDIVISION' => self::escape($egs_unit['location']['city_subdivision']),
+            'SET_CITY' => self::escape($egs_unit['location']['city']),
+            'SET_POSTAL_NUMBER' => self::escape($egs_unit['location']['postal_zone']),
+            'SET_VAT_NUMBER' => self::escape($egs_unit['VAT_number']),
+            'SET_VAT_NAME' => self::escape($egs_unit['VAT_name']),
+            'PARSE_LINE_ITEMS' => $this->parseLineItems($invoice['line_items']),
+        ]);
+
+        return $this->loadXML($populated_template, 'invoice');
+    }
+
+    /**
+     * @throws RuntimeException If the populated template is not well formed XML.
+     */
+    private function loadXML(string $xml, string $what): DOMDocument
+    {
+        $previous_state = libxml_use_internal_errors(true);
+        libxml_clear_errors();
 
         $document = new DOMDocument();
-        $document->loadXML($populated_template);
+        $loaded = $document->loadXML($xml);
+
+        $errors = array_map(function ($error) {
+            return trim($error->message) . ' (line ' . $error->line . ')';
+        }, libxml_get_errors());
+
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous_state);
+
+        if (!$loaded) {
+            throw new RuntimeException(sprintf(
+                'The generated %s XML is not well formed: %s',
+                $what,
+                $errors ? implode('; ', $errors) : 'unknown parse error'
+            ));
+        }
+
         return $document;
     }
 
     private function defaultBillingReference(string $invoice_number): string
     {
-        $populated_template = require ROOT_PATH . '/ZATCA/templates/invoice_billing_reference_template.php';
-        return str_replace('SET_INVOICE_NUMBER', $invoice_number, $populated_template);
+        $populated_template = require self::template('invoice_billing_reference_template.php');
+
+        return strtr($populated_template, ['SET_INVOICE_NUMBER' => self::escape($invoice_number)]);
     }
 
     public function getInvoiceHash(DOMDocument $invoice_xml): string
@@ -85,8 +194,17 @@ class ZATCASimplifiedTaxInvoice
         while ($element = $document->getElementsByTagName('Signature')->item(0))
             $element->parentNode->removeChild($element);
 
-        while ($element = $document->getElementsByTagName('AdditionalDocumentReference')->item(2)) // qr code tag remove
-            $element->parentNode->removeChild($element);
+        // The QR reference is excluded from the signed data (ds:Transform XPath
+        // not(//ancestor-or-self::cac:AdditionalDocumentReference[cbc:ID='QR'])).
+        // Match it by its ID rather than by position, so an added reference cannot
+        // silently make us strip the wrong element.
+        foreach (iterator_to_array($document->getElementsByTagName('AdditionalDocumentReference')) as $reference) {
+            /** @var DOMElement $reference */
+            $id = $reference->getElementsByTagName('ID')->item(0);
+            if ($id && trim($id->textContent) === 'QR') {
+                $reference->parentNode->removeChild($reference);
+            }
+        }
 
         return $document->saveXML();
     }
@@ -99,82 +217,95 @@ class ZATCASimplifiedTaxInvoice
         $hash = $this->getCertificateHash($cleaned_certificate_string);
 
         $x509 = openssl_x509_parse($wrapped_certificate_string);
+        if ($x509 === false) {
+            throw new RuntimeException('Unable to parse the cryptographic stamp certificate: ' . self::opensslErrors());
+        }
 
         // Signature, and public key extraction from x509 PEM certificate (asn1 rfc5280)
-        // Crypto module does not have those functionalities so i'm the crypto boy now :(
-        // https://github.com/nodejs/node/blob/main/ZATCA/crypto/crypto_x509.cc
         // https://linuxctl.com/2017/02/x509-certificate-manual-signature-verification/
-        // https://github.com/junkurihara/js-x509-utils/blob/develop/ZATCA/x509.js
-        // decode binary x509-formatted object
 
         $res = openssl_get_publickey($wrapped_certificate_string);
-        $cert = openssl_pkey_get_details($res);
+        if ($res === false) {
+            throw new RuntimeException('Unable to read the certificate public key: ' . self::opensslErrors());
+        }
 
+        $cert = openssl_pkey_get_details($res);
         $public_key = str_replace(['-----BEGIN PUBLIC KEY-----', '-----END PUBLIC KEY-----'], '', $cert['key']);
 
         return [
             $hash,
-            'CN=' . implode(', ', array_reverse((array) $x509['issuer'])),
+            $this->formatDistinguishedName($x509['issuer'] ?? []),
             $x509['serialNumber'],
             base64_decode($public_key),
             $this->getCertificateSignature($wrapped_certificate_string),
         ];
     }
 
-    public function getCertificateSignature(string $cer): string
+    /**
+     * Rebuild an RFC 2253 style distinguished name ("CN=…, OU=…, O=…, C=SA") from the
+     * relative distinguished names returned by openssl_x509_parse(). The attribute keys
+     * have to be kept: the result goes into <ds:X509IssuerName>, which ZATCA compares
+     * against the real issuer of the certificate.
+     */
+    private function formatDistinguishedName(array $relative_names): string
     {
-        $res = openssl_x509_read($cer);
-        openssl_x509_export($res, $out, FALSE);
+        $parts = [];
 
-        $out = explode('Signature Algorithm:', $out);
-        $out = explode('-----BEGIN CERTIFICATE-----', $out[2]);
-        $out = explode("\n", $out[0]);
-        $out = $out[1] . $out[2] . $out[3] . $out[4];
-        $out = str_replace([':', ' '], '', $out);
-
-        return pack('H*', $out);
-    }
-
-    public function extractSignature($certPemString)
-    {
-
-        $bin = ($certPemString);
-
-        if (empty($certPemString) || empty($bin)) {
-            return false;
-        }
-
-        $bin = substr($bin, 4);
-
-        while (strlen($bin) > 1) {
-            $seq = ord($bin[0]);
-            if ($seq == 0x03 || $seq == 0x30) {
-                $len = ord($bin[1]);
-                $bytes = 0;
-
-                if ($len & 0x80) {
-                    $bytes = ($len & 0x0f);
-                    $len = 0;
-                    for ($i = 0; $i < $bytes; $i++) {
-                        $len = ($len << 8) | ord($bin[$i + 2]);
-                    }
-                }
-
-                if ($seq == 0x03) {
-                    return substr($bin, 3 + $bytes, $len);
-                } else {
-                    $bin = substr($bin, 2 + $bytes + $len);
-                }
-            } else {
-                return false;
+        foreach (array_reverse($relative_names, true) as $key => $value) {
+            foreach (array_reverse((array) $value) as $single) {
+                $parts[] = $key . '=' . $single;
             }
         }
-        return false;
+
+        return implode(', ', $parts);
     }
 
+    public function getCertificateSignature(string $cer): string
+    {
+        $x509 = openssl_x509_read($cer);
+        if ($x509 === false) {
+            throw new RuntimeException('Unable to read the cryptographic stamp certificate: ' . self::opensslErrors());
+        }
+
+        if (!openssl_x509_export($x509, $out, false)) {
+            throw new RuntimeException('Unable to export the certificate: ' . self::opensslErrors());
+        }
+
+        // Everything before the PEM block is OpenSSL's human readable dump; the very last
+        // run of colon separated hex bytes in it is the certificate signature. Reading it
+        // backwards keeps this working regardless of how many lines the signature spans or
+        // how the surrounding labels are worded across OpenSSL versions.
+        $text = explode('-----BEGIN CERTIFICATE-----', $out)[0];
+
+        $hex = '';
+        foreach (array_reverse(explode("\n", $text)) as $line) {
+            $line = trim($line);
+
+            if (preg_match('/^(?:[0-9a-fA-F]{2}:)*[0-9a-fA-F]{2}:?$/', $line) === 1) {
+                $hex = str_replace(':', '', $line) . $hex;
+                continue;
+            }
+
+            if ($hex !== '') {
+                break;
+            }
+        }
+
+        if ($hex === '') {
+            throw new RuntimeException('No signature found in the certificate dump.');
+        }
+
+        return pack('H*', $hex);
+    }
+
+    /**
+     * ZATCA expects the base64 of the *hex* digest here, which is why the digest is not
+     * converted to raw bytes first.
+     */
     private function getCertificateHash($cleanup_certificate_string): string
     {
         $hash = openssl_digest($cleanup_certificate_string, 'sha256');
+
         return base64_encode($hash);
     }
 
@@ -186,15 +317,42 @@ class ZATCASimplifiedTaxInvoice
         return trim($certificate_string);
     }
 
-    public function createInvoiceDigitalSignature(string $invoice_hash, string $private_key)
+    /**
+     * The cryptographic stamp is an ECDSA signature over the *bytes* of the invoice hash,
+     * so the base64 hash has to be decoded first.
+     */
+    public function createInvoiceDigitalSignature(string $invoice_hash, string $private_key): string
     {
-        $invoice_hash_bytes = base64_encode($invoice_hash);
-        $cleanedup_private_key_string = $this->cleanUpPrivateKeyString($private_key);
-        $wrapped_private_key_string = "-----BEGIN EC PRIVATE KEY-----\n{$cleanedup_private_key_string}\n-----END EC PRIVATE KEY-----";
+        $invoice_hash_bytes = base64_decode($invoice_hash, true);
+        if ($invoice_hash_bytes === false) {
+            throw new InvalidArgumentException('The invoice hash is not valid base64.');
+        }
 
-        base64_encode(openssl_sign($invoice_hash_bytes, $binary_signature, $wrapped_private_key_string, 'sha256'));
+        $key = openssl_pkey_get_private(self::wrapPrivateKeyString($private_key));
+        if ($key === false) {
+            throw new RuntimeException('Unable to read the EGS private key: ' . self::opensslErrors());
+        }
+
+        if (!openssl_sign($invoice_hash_bytes, $binary_signature, $key, OPENSSL_ALGO_SHA256)) {
+            throw new RuntimeException('Unable to sign the invoice hash: ' . self::opensslErrors());
+        }
 
         return base64_encode($binary_signature);
+    }
+
+    /**
+     * Accepts a PEM key as generated by this library (SEC1 "EC PRIVATE KEY"), a bare
+     * base64 body, or any other PEM the caller already holds (e.g. PKCS#8).
+     */
+    public static function wrapPrivateKeyString(string $private_key): string
+    {
+        $private_key = trim($private_key);
+
+        if (str_contains($private_key, '-----BEGIN')) {
+            return $private_key;
+        }
+
+        return "-----BEGIN EC PRIVATE KEY-----\n{$private_key}\n-----END EC PRIVATE KEY-----";
     }
 
     public static function cleanUpPrivateKeyString(string $private_key)
@@ -205,7 +363,7 @@ class ZATCASimplifiedTaxInvoice
         return trim($private_key);
     }
 
-    public function generateQR(DOMDocument $invoice_xml, string $digital_signature, $public_key, $signature, string $invoice_hash)
+    public function generateQR(DOMDocument $invoice_xml, string $digital_signature, $public_key, $signature, string $invoice_hash): string
     {
         // Extract required tags
         $seller_name = $invoice_xml->getElementsByTagName('AccountingSupplierParty')[0]
@@ -215,239 +373,186 @@ class ZATCASimplifiedTaxInvoice
 
         $invoice_total = $invoice_xml->getElementsByTagName('TaxInclusiveAmount')[0]->textContent;
 
-        $VAT_total = 0;
+        $VAT_total = '0';
         if ($tax_amount = $invoice_xml->getElementsByTagName('TaxTotal')[0]) {
             $VAT_total = $tax_amount->getElementsByTagName('TaxAmount')[0]->textContent;
         }
 
-        $issue_date = $invoice_xml->getElementsByTagName('IssueDate')[0]->textContent;
-        $issue_time = $invoice_xml->getElementsByTagName('IssueTime')[0]->textContent;
+        $issue_date = trim($invoice_xml->getElementsByTagName('IssueDate')[0]->textContent);
+        $issue_time = trim($invoice_xml->getElementsByTagName('IssueTime')[0]->textContent);
 
-        // Detect if simplified invoice or not (not used currently assuming all simplified tax invoice)
-        //$invoice_type = $invoice_xml->getElementsByTagName('Invoice/cbc:InvoiceTypeCode')[0]['@_name'];
+        // The QR timestamp must mirror the invoice's own IssueDate/IssueTime, so the two
+        // are concatenated rather than round tripped through the server's timezone.
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue_date) || !preg_match('/^\d{2}:\d{2}:\d{2}$/', $issue_time)) {
+            throw new InvalidArgumentException(sprintf(
+                'Expected issue_date as YYYY-MM-DD and issue_time as HH:MM:SS, got "%s" and "%s".',
+                $issue_date,
+                $issue_time
+            ));
+        }
 
-        $formatted_datetime = date('Y-m-d\TH:i:s\Z', strtotime("{$issue_date} {$issue_time}"));
+        $formatted_datetime = "{$issue_date}T{$issue_time}Z";
 
-        $qr_tlv = $this->TLV([
-            $seller_name,
-            $VAT_number,
-            $formatted_datetime,
-            $invoice_total,
-            $VAT_total,
-            $invoice_hash,
-            $digital_signature,
-            $public_key,
-            $signature
-        ]);
-
-        return base64_encode($qr_tlv);
-    }
-
-    private function TLV(array $tags): string
-    {
-        $__toHex = function ($value) {
-            return pack('H*', sprintf('%02X', $value));
-        };
-
-        $__toString = function ($__tag, $__value, $__length) use ($__toHex) {
-            $value = (string)$__value;
-            return $__toHex($__tag) . $__toHex($__length) . $value;
-        };
-
-        foreach ($tags as $i => $tag)
-            $__TLVS[] = $__toString($i + 1, $tag, strlen($tag));
-
-
-        return implode('', $__TLVS) ?? '';
+        return GenerateQrCode::fromArray([
+            new Seller($seller_name),
+            new TaxNumber($VAT_number),
+            new InvoiceDate($formatted_datetime),
+            new InvoiceTotalAmount($invoice_total),
+            new InvoiceTaxAmount($VAT_total),
+            new InvoiceHash($invoice_hash),
+            new DigitalSignature($digital_signature),
+            new PublicKey($public_key),
+            new CertificateSignature($signature),
+        ])->toBase64();
     }
 
     public function defaultUBLExtensionsSignedPropertiesForSigning(array $signed_properties_props): string
     {
-        $populated_template = require ROOT_PATH . '/ZATCA/templates/ubl_signature_signed_properties_for_signing_template.php';
-
-        $populated_template = str_replace('SET_SIGN_TIMESTAMP', $signed_properties_props['sign_timestamp'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_HASH', $signed_properties_props['certificate_hash'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_ISSUER', $signed_properties_props['certificate_issuer'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_SERIAL_NUMBER', $signed_properties_props['certificate_serial_number'], $populated_template);
-
-        return $populated_template;
+        return $this->populateSignedProperties(
+            require self::template('ubl_signature_signed_properties_for_signing_template.php'),
+            $signed_properties_props
+        );
     }
 
     public function defaultUBLExtensionsSignedProperties(array $signed_properties_props): string
     {
-        $populated_template = require ROOT_PATH . '/ZATCA/templates/ubl_signature_signed_properties_template.php';
+        return $this->populateSignedProperties(
+            require self::template('ubl_signature_signed_properties_template.php'),
+            $signed_properties_props
+        );
+    }
 
-        $populated_template = str_replace('SET_SIGN_TIMESTAMP', $signed_properties_props['sign_timestamp'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_HASH', $signed_properties_props['certificate_hash'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_ISSUER', $signed_properties_props['certificate_issuer'], $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE_SERIAL_NUMBER', $signed_properties_props['certificate_serial_number'], $populated_template);
-
-        return $populated_template;
+    private function populateSignedProperties(string $template, array $signed_properties_props): string
+    {
+        return strtr($template, [
+            'SET_SIGN_TIMESTAMP' => self::escape($signed_properties_props['sign_timestamp']),
+            'SET_CERTIFICATE_HASH' => self::escape($signed_properties_props['certificate_hash']),
+            'SET_CERTIFICATE_ISSUER' => self::escape($signed_properties_props['certificate_issuer']),
+            'SET_CERTIFICATE_SERIAL_NUMBER' => self::escape($signed_properties_props['certificate_serial_number']),
+        ]);
     }
 
     public function defaultUBLExtensions(string $invoice_hash, string $signed_properties_hash, string $digital_signature, string $cleanUpCertificateString, string $ubl_signature_signed_properties_xml_string): string
     {
-        $cleanUpCertificateString = $this->cleanUpCertificateString($cleanUpCertificateString);
+        $populated_template = require self::template('ubl_signature.php');
 
-        $populated_template = require ROOT_PATH . '/ZATCA/templates/ubl_signature.php';
-        $populated_template = str_replace('SET_INVOICE_HASH', $invoice_hash, $populated_template);
-        $populated_template = str_replace('SET_SIGNED_PROPERTIES_HASH', $signed_properties_hash, $populated_template);
-        $populated_template = str_replace('SET_DIGITAL_SIGNATURE', $digital_signature, $populated_template);
-        $populated_template = str_replace('SET_CERTIFICATE', $cleanUpCertificateString, $populated_template);
-        $populated_template = str_replace('SET_SIGNED_PROPERTIES_XML', $ubl_signature_signed_properties_xml_string, $populated_template);
-
-        return $populated_template;
+        return strtr($populated_template, [
+            'SET_INVOICE_HASH' => $invoice_hash,
+            'SET_SIGNED_PROPERTIES_HASH' => $signed_properties_hash,
+            'SET_DIGITAL_SIGNATURE' => $digital_signature,
+            'SET_CERTIFICATE' => $this->cleanUpCertificateString($cleanUpCertificateString),
+            'SET_SIGNED_PROPERTIES_XML' => $ubl_signature_signed_properties_xml_string,
+        ]);
     }
 
-    /**
-     * This hurts to do :'(. I hope that it's only temporary and ZATCA decides to just minify the XML before doing any hashing on it.
-     * there is no logical reason why the validation expects an incorrectly indented XML.
-     * Anyway, this is a function that fucks up the indentation in order to match validator hashing.
-     */
-    public function signedPropertiesIndentationFix(string $signed_invoice_string): string
+    private function parseLineItems(array $line_items): string
     {
-        $fixer = $signed_invoice_string;
-        $signed_props_lines = explode('<ds:Object>', $fixer)[1];
-        $signed_props_lines = explode('</ds:Object>', $signed_props_lines)[0];
-        $signed_props_lines = explode("\n", $signed_props_lines);
+        if ($line_items === []) {
+            throw new InvalidArgumentException('The invoice has no line items.');
+        }
 
-        $fixed_lines = [];
-
-        // Stripping first 4 spaces
-
-        $fixed_lines[] = array_slice($signed_props_lines, 4);
-
-        $signed_props_lines = array_slice($signed_props_lines, sizeof($signed_props_lines) - 1);
-        $fixed_lines = array_slice($fixed_lines, sizeof($fixed_lines) - 1);
-
-        $fixed_lines = implode("\n", $fixed_lines[0]);
-        $signed_props_lines = implode("\n", $signed_props_lines);
-
-        $fixer = str_replace($fixed_lines, $signed_props_lines, $fixer);
-
-        return $fixer;
-    }
-
-    private function parseLineItems(array $line_items)
-    {
         // BT-110
         $total_taxes = 0;
         $total_subtotal = 0;
 
         $invoice_line_items = [];
 
-        array_map(function ($line_item) use (&$total_taxes, &$total_subtotal, &$invoice_line_items) {
-
+        foreach ($line_items as $line_item) {
             list($line_item_xml, $line_item_totals) = $this->constructLineItem($line_item);
 
             $total_taxes += $line_item_totals['taxes_total'];
-            $total_subtotal += (float)$line_item_totals['subtotal'];
+            $total_subtotal += (float) $line_item_totals['subtotal'];
 
             $invoice_line_items[] = $line_item_xml;
-        }, $line_items);
-
-//        if(props.cancelation) {
-//            // Invoice canceled. Tunred into credit/debit note. Must have PaymentMeans
-//            // BR-KSA-17
-//            $this->invoice_xml.set('Invoice/cac:PaymentMeans', false, {
-//                'cbc:PaymentMeansCode': props.cancelation.payment_method,
-//                'cbc:InstructionNote': props.cancelation.reason ?? 'No note Specified'
-//            });
-//        }
+        }
 
         /*
          * <cac:TaxTotal>
          *      </cac:TaxSubtotal> ...
          * set invoice lines
          */
-        $tax_total_template = require ROOT_PATH . '/ZATCA/templates/tax_total_template.php';
+        $tax_total_template = require self::template('tax_total_template.php');
 
         $item_lines = $this->constructTaxTotal($line_items);
 
         $lines = '';
         foreach ($item_lines[0]['cac:TaxSubtotal'] as $line) {
-
-            $l = $tax_total_template['tax_sub_total'];
-            $l = str_replace('46.00', $line['cbc:TaxableAmount']['#text'], $l);
-            $l = str_replace('_6.89', $line['cbc:TaxAmount']['#text'], $l);
-            $l = str_replace('__S', $line['cac:TaxCategory']['cbc:ID']['#text'], $l);
-            $l = str_replace('15.00', $line['cac:TaxCategory']['cbc:Percent'], $l);
-
-            $lines .= $l;
+            $lines .= strtr($tax_total_template['tax_sub_total'], [
+                'SET_TAXABLE_AMOUNT' => $line['cbc:TaxableAmount']['#text'],
+                'SET_SUBTOTAL_TAX_AMOUNT' => $line['cbc:TaxAmount']['#text'],
+                'SET_TAX_CATEGORY_ID' => $line['cac:TaxCategory']['cbc:ID']['#text'],
+                'SET_TAX_CATEGORY_PERCENT' => $line['cac:TaxCategory']['cbc:Percent'],
+            ]);
         }
 
-        $tax_total_template['tax_total'] = str_replace('__158.67', $item_lines[0]['cbc:TaxAmount']['#text'], $tax_total_template['tax_total']);
-        $tax_total_template['tax_total'] = str_replace('___tax_amount', $item_lines[1]['cbc:TaxAmount']['#text'], $tax_total_template['tax_total']);
-        $tax_total_template = str_replace('__TaxSubtotal', $lines, $tax_total_template['tax_total']);
+        $tax_total = strtr($tax_total_template['tax_total'], [
+            'SET_TAX_TOTAL_AMOUNT_1' => $item_lines[0]['cbc:TaxAmount']['#text'],
+            'SET_TAX_TOTAL_AMOUNT_2' => $item_lines[1]['cbc:TaxAmount']['#text'],
+            'SET_TAX_SUBTOTALS' => $lines,
+        ]);
 
         /*
          * <cac:LegalMonetaryTotal>
          * $legal_monetary_total_template tags set
          */
-        $legal_monetary_total_template = require ROOT_PATH . '/ZATCA/templates/legal_monetary_total_template.php';
+        $legal_monetary_total_template = require self::template('legal_monetary_total_template.php');
 
         $constructLegalMonetaryTotal = $this->constructLegalMonetaryTotal($total_subtotal, $total_taxes);
 
-        $legal_monetary_total_template = str_replace('_LineExtensionAmount', $constructLegalMonetaryTotal['cbc:LineExtensionAmount']['#text'], $legal_monetary_total_template);
-        $legal_monetary_total_template = str_replace('_TaxExclusiveAmount', $constructLegalMonetaryTotal['cbc:TaxExclusiveAmount']['#text'], $legal_monetary_total_template);
-        $legal_monetary_total_template = str_replace('_TaxInclusiveAmount', $constructLegalMonetaryTotal['cbc:TaxInclusiveAmount']['#text'], $legal_monetary_total_template);
-        $legal_monetary_total_template = str_replace('_AllowanceTotalAmount', $constructLegalMonetaryTotal['cbc:AllowanceTotalAmount']['#text'], $legal_monetary_total_template);
-        $legal_monetary_total_template = str_replace('_PrepaidAmount', $constructLegalMonetaryTotal['cbc:PrepaidAmount']['#text'], $legal_monetary_total_template);
-        $legal_monetary_total_template = str_replace('_PayableAmount', $constructLegalMonetaryTotal['cbc:PayableAmount']['#text'], $legal_monetary_total_template);
+        $legal_monetary_total = strtr($legal_monetary_total_template, [
+            '_LineExtensionAmount' => $constructLegalMonetaryTotal['cbc:LineExtensionAmount']['#text'],
+            '_TaxExclusiveAmount' => $constructLegalMonetaryTotal['cbc:TaxExclusiveAmount']['#text'],
+            '_TaxInclusiveAmount' => $constructLegalMonetaryTotal['cbc:TaxInclusiveAmount']['#text'],
+            '_AllowanceTotalAmount' => $constructLegalMonetaryTotal['cbc:AllowanceTotalAmount']['#text'],
+            '_PrepaidAmount' => $constructLegalMonetaryTotal['cbc:PrepaidAmount']['#text'],
+            '_PayableAmount' => $constructLegalMonetaryTotal['cbc:PayableAmount']['#text'],
+        ]);
 
         /*
          * <cac:InvoiceLine> ...
          * set invoice lines
          */
-        $invoice_line_template = require_once ROOT_PATH . '/ZATCA/templates/invoice_line_template.php';
+        $invoice_line_template = require self::template('invoice_line_template.php');
 
         $invoice_line = '';
         foreach ($invoice_line_items as $item) {
 
-            $invoice_line_template_copy = $invoice_line_template['invoice_line'];
-
-            $invoice_line_template_copy = str_replace('__ID', $item['cbc:ID'], $invoice_line_template_copy);
-            $invoice_line_template_copy = str_replace('__InvoicedQuantity', $item['cbc:InvoicedQuantity']['#text'], $invoice_line_template_copy);
-            $invoice_line_template_copy = str_replace('__LineExtensionAmount', $item['cbc:LineExtensionAmount']['#text'], $invoice_line_template_copy);
-            $invoice_line_template_copy = str_replace('__TaxAmount', $item['cac:TaxTotal']['cbc:TaxAmount']['#text'], $invoice_line_template_copy);
-            $invoice_line_template_copy = str_replace('__RoundingAmount', $item['cac:TaxTotal']['cbc:RoundingAmount']['#text'], $invoice_line_template_copy);
-
-            $invoice_line_template_copy = str_replace('__Name', $item['cac:Item']['cbc:Name'], $invoice_line_template_copy);
-
-            /*
-             *
-             */
-            $iit = '';
+            $classified_tax_categories = '';
             foreach ($item['cac:Item']['cac:ClassifiedTaxCategory'] as $ClassifiedTaxCategory) {
-                $invoice_item_template = $invoice_line_template['invoice_item'];
-                $invoice_item_template = str_replace('___S', $ClassifiedTaxCategory['cbc:ID'], $invoice_item_template);
-                $invoice_item_template = str_replace('___Percent', $ClassifiedTaxCategory['cbc:Percent'], $invoice_item_template);
-
-                $iit .= $invoice_item_template;
+                $classified_tax_categories .= strtr($invoice_line_template['invoice_item'], [
+                    'SET_ITEM_TAX_CATEGORY_ID' => $ClassifiedTaxCategory['cbc:ID'],
+                    'SET_ITEM_TAX_PERCENT' => $ClassifiedTaxCategory['cbc:Percent'],
+                ]);
             }
-            $invoice_line_template_copy = str_replace('ClassifiedTaxCategory', $iit, $invoice_line_template_copy);
 
-            /*
-             *
-             */
-            $ipt = '';
+            $allowance_charges = '';
             foreach ($item['cac:Price']['cac:AllowanceCharge'] as $AllowanceCharge) {
-                $invoice_price_template = $invoice_line_template['invoice_price'];
-                $invoice_price_template = str_replace('___AllowanceChargeReason', $AllowanceCharge['cbc:AllowanceChargeReason'], $invoice_price_template);
-                $invoice_price_template = str_replace('___Amount', $AllowanceCharge['cbc:Amount']['#text'], $invoice_price_template);
-
-                $ipt .= $invoice_price_template;
+                $allowance_charges .= strtr($invoice_line_template['invoice_price'], [
+                    'SET_ALLOWANCE_REASON' => self::escape($AllowanceCharge['cbc:AllowanceChargeReason']),
+                    'SET_ALLOWANCE_AMOUNT' => $AllowanceCharge['cbc:Amount']['#text'],
+                ]);
             }
-            $invoice_line_template_copy = str_replace('AllowanceCharge', $ipt, $invoice_line_template_copy);
 
-            $invoice_line .= $invoice_line_template_copy;
+            $invoice_line .= strtr($invoice_line_template['invoice_line'], [
+                'SET_LINE_ID' => self::escape($item['cbc:ID']),
+                'SET_LINE_QUANTITY' => self::escape($item['cbc:InvoicedQuantity']['#text']),
+                'SET_LINE_EXTENSION_AMOUNT' => $item['cbc:LineExtensionAmount']['#text'],
+                'SET_LINE_TAX_AMOUNT' => $item['cac:TaxTotal']['cbc:TaxAmount']['#text'],
+                'SET_LINE_ROUNDING_AMOUNT' => $item['cac:TaxTotal']['cbc:RoundingAmount']['#text'],
+                'SET_LINE_ITEM_NAME' => self::escape($item['cac:Item']['cbc:Name']),
+                'SET_LINE_PRICE_AMOUNT' => $item['cac:Price']['cbc:PriceAmount']['#text'],
+                'SET_CLASSIFIED_TAX_CATEGORIES' => $classified_tax_categories,
+                'SET_ALLOWANCE_CHARGES' => $allowance_charges,
+            ]);
         }
 
-        return $tax_total_template . $legal_monetary_total_template . $invoice_line;
+        return $tax_total . $legal_monetary_total . $invoice_line;
     }
 
     private function constructLineItem($line_item): array
     {
+        self::assertKeys($line_item, ['id', 'name', 'quantity', 'tax_exclusive_price', 'VAT_percent'], 'A line item');
+
         [
             $cacAllowanceCharges,
             $cacClassifiedTaxCategories, $cacTaxTotal,
@@ -476,7 +581,7 @@ class ZATCASimplifiedTaxInvoice
                 'cac:Price' => [
                     'cbc:PriceAmount' => [
                         '@_currencyID' => 'SAR',
-                        '#text' => $line_item['tax_exclusive_price']
+                        '#text' => number_format((float) $line_item['tax_exclusive_price'], 2, '.', '')
                     ],
                     'cac:AllowanceCharge' => $cacAllowanceCharges
                 ]
@@ -509,7 +614,7 @@ class ZATCASimplifiedTaxInvoice
         $cacClassifiedTaxCategories[] = $VAT;
 
         // Calc total discounts
-        array_map(function ($discount) use (&$line_item_total_discounts, &$cacAllowanceCharges) {
+        foreach ($line_item['discounts'] ?? [] as $discount) {
             $line_item_total_discounts += $discount['amount'];
             $cacAllowanceCharges[] = [
                 'cbc:ChargeIndicator' => 'false',
@@ -520,8 +625,7 @@ class ZATCASimplifiedTaxInvoice
                     '#text' => number_format($discount['amount'], 2, '.', '')
                 ]
             ];
-        }, $line_item['discounts'] ?? []);
-
+        }
 
         // Calc item subtotal
         $line_item_subtotal = ($line_item['tax_exclusive_price'] * $line_item['quantity']) - $line_item_total_discounts;
@@ -530,7 +634,7 @@ class ZATCASimplifiedTaxInvoice
         // BR-KSA-DEC-02
         $line_item_total_taxes = $line_item_total_taxes + ($line_item_subtotal * $line_item['VAT_percent']);
 
-        array_map(function ($tax) use (&$line_item_total_taxes, $line_item_subtotal, &$cacClassifiedTaxCategories) {
+        foreach ($line_item['other_taxes'] ?? [] as $tax) {
             $line_item_total_taxes = $line_item_total_taxes + (floatval($tax['percent_amount']) * $line_item_subtotal);
 
             $cacClassifiedTaxCategories[] = [
@@ -540,8 +644,7 @@ class ZATCASimplifiedTaxInvoice
                     'cbc:ID' => 'VAT'
                 ]
             ];
-
-        }, $line_item['other_taxes'] ?? [])[0] ?? [0, 0];
+        }
 
         // BR-KSA-DEC-03, BR-KSA-51
         $cacTaxTotal = [
@@ -585,11 +688,11 @@ class ZATCASimplifiedTaxInvoice
             ],
             'cbc:AllowanceTotalAmount' => [
                 '@_currencyID' => 'SAR',
-                '#text' => 0
+                '#text' => number_format(0, 2, '.', '')
             ],
             'cbc:PrepaidAmount' => [
                 '@_currencyID' => 'SAR',
-                '#text' => 0
+                '#text' => number_format(0, 2, '.', '')
             ],
             // BR-DEC-18, BT-112
             'cbc:PayableAmount' => [
@@ -635,21 +738,23 @@ class ZATCASimplifiedTaxInvoice
         };
 
         $taxes_total = 0;
-        array_map(function ($line_item) use (&$addTaxSubtotal, &$taxes_total) {
-            $total_line_item_discount = array_reduce($line_item['discounts'], function ($p, $c) {
+        foreach ($line_items as $line_item) {
+            $total_line_item_discount = array_reduce($line_item['discounts'] ?? [], function ($p, $c) {
                 return $p + $c['amount'];
             }, 0);
-            $taxable_amount = ($line_item['tax_exclusive_price'] * $line_item['quantity']) - ($total_line_item_discount ?? 0);
+
+            $taxable_amount = ($line_item['tax_exclusive_price'] * $line_item['quantity']) - $total_line_item_discount;
 
             $tax_amount = ((float)$line_item['VAT_percent']) * ((float)$taxable_amount);
             $addTaxSubtotal($taxable_amount, $tax_amount, $line_item['VAT_percent']);
             $taxes_total += $tax_amount;
-            array_map(function ($tax) use (&$taxable_amount, &$addTaxSubtotal, &$taxes_total) {
-                $tax_amount = $tax['percent_amount'] * $taxable_amount;
-                $addTaxSubtotal($taxable_amount, $tax_amount, $tax['percent_amount']);
-                $taxes_total += $tax_amount;
-            }, $line_item['other_taxes']);
-        }, $line_items);
+
+            foreach ($line_item['other_taxes'] ?? [] as $tax) {
+                $other_tax_amount = $tax['percent_amount'] * $taxable_amount;
+                $addTaxSubtotal($taxable_amount, $other_tax_amount, $tax['percent_amount']);
+                $taxes_total += $other_tax_amount;
+            }
+        }
 
         // BT-110
         $taxes_total = number_format($taxes_total, 2, '.', '');

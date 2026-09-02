@@ -1,0 +1,11 @@
+# Keep the Composer package small: none of this is needed at runtime.
+/.gitattributes    export-ignore
+/.gitignore        export-ignore
+/assets/           export-ignore
+/docs/             export-ignore
+/tests/            export-ignore
+/phase-1.php       export-ignore
+/phase-2.php       export-ignore
+
+*.php text eol=lf
+*.md  text eol=lf

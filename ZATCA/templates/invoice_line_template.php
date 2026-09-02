@@ -3,18 +3,18 @@
 $invoice_line = <<<XML
 
     <cac:InvoiceLine>
-        <cbc:ID>__ID</cbc:ID>
-        <cbc:InvoicedQuantity unitCode="PCE">__InvoicedQuantity</cbc:InvoicedQuantity>
-        <cbc:LineExtensionAmount currencyID="SAR">__LineExtensionAmount</cbc:LineExtensionAmount>
+        <cbc:ID>SET_LINE_ID</cbc:ID>
+        <cbc:InvoicedQuantity unitCode="PCE">SET_LINE_QUANTITY</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount currencyID="SAR">SET_LINE_EXTENSION_AMOUNT</cbc:LineExtensionAmount>
         <cac:TaxTotal>
-            <cbc:TaxAmount currencyID="SAR">__TaxAmount</cbc:TaxAmount>
-            <cbc:RoundingAmount currencyID="SAR">__RoundingAmount</cbc:RoundingAmount>
+            <cbc:TaxAmount currencyID="SAR">SET_LINE_TAX_AMOUNT</cbc:TaxAmount>
+            <cbc:RoundingAmount currencyID="SAR">SET_LINE_ROUNDING_AMOUNT</cbc:RoundingAmount>
         </cac:TaxTotal>
         <cac:Item>
-            <cbc:Name>__Name</cbc:Name>ClassifiedTaxCategory
+            <cbc:Name>SET_LINE_ITEM_NAME</cbc:Name>SET_CLASSIFIED_TAX_CATEGORIES
         </cac:Item>
         <cac:Price>
-            <cbc:PriceAmount currencyID="SAR">10</cbc:PriceAmount>AllowanceCharge
+            <cbc:PriceAmount currencyID="SAR">SET_LINE_PRICE_AMOUNT</cbc:PriceAmount>SET_ALLOWANCE_CHARGES
         </cac:Price>
     </cac:InvoiceLine>
 XML;
@@ -22,8 +22,8 @@ XML;
 $invoice_item = <<<XML
 
             <cac:ClassifiedTaxCategory>
-                <cbc:ID>___S</cbc:ID>
-                <cbc:Percent>___Percent</cbc:Percent>
+                <cbc:ID>SET_ITEM_TAX_CATEGORY_ID</cbc:ID>
+                <cbc:Percent>SET_ITEM_TAX_PERCENT</cbc:Percent>
                 <cac:TaxScheme>
                     <cbc:ID>VAT</cbc:ID>
                 </cac:TaxScheme>
@@ -34,8 +34,8 @@ $invoice_price = <<<XML
 
             <cac:AllowanceCharge>
                 <cbc:ChargeIndicator>false</cbc:ChargeIndicator>
-                <cbc:AllowanceChargeReason>___AllowanceChargeReason</cbc:AllowanceChargeReason>
-                <cbc:Amount currencyID="SAR">___Amount</cbc:Amount>
+                <cbc:AllowanceChargeReason>SET_ALLOWANCE_REASON</cbc:AllowanceChargeReason>
+                <cbc:Amount currencyID="SAR">SET_ALLOWANCE_AMOUNT</cbc:Amount>
             </cac:AllowanceCharge>
 XML;
 

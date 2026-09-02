@@ -1,18 +1,23 @@
 <?php
-error_reporting(E_ERROR);
-ini_set('display_errors', 1);
+
+/**
+ * Phase 2 example: onboard an EGS unit, sign a simplified tax invoice and render its QR.
+ *
+ * This talks to the ZATCA gateway, so it needs a real OTP from the Fatoora portal and
+ * only ever runs against the sandbox/simulation environment here. Run it from the CLI
+ * (`php phase-2.php`) or serve it over HTTP. Requires `composer install`.
+ */
+
 require __DIR__ . '/vendor/autoload.php';
 
-use ZATCA\EGS;
-use Endroid\QrCode\QrCode;
-use Endroid\QrCode\Logo\Logo;
 use Endroid\QrCode\Color\Color;
-use Endroid\QrCode\Label\Label;
-use Endroid\QrCode\Writer\PngWriter;
 use Endroid\QrCode\Encoding\Encoding;
 use Endroid\QrCode\ErrorCorrectionLevel;
-
-const ROOT_PATH = __DIR__;
+use Endroid\QrCode\Label\Label;
+use Endroid\QrCode\Logo\Logo;
+use Endroid\QrCode\QrCode;
+use Endroid\QrCode\Writer\PngWriter;
+use ZATCA\EGS;
 
 $line_item = [
     'id' => '1',
@@ -65,22 +70,24 @@ $invoice = [
     ],
 ];
 
-$egs = new EGS($egs_unit);
-
-$egs->production = false;
+// EGS::ENV_SANDBOX (developer portal), EGS::ENV_SIMULATION or EGS::ENV_PRODUCTION.
+$egs = new EGS($egs_unit, EGS::ENV_SANDBOX);
 
 // New Keys & CSR for the EGS
 list($private_key, $csr) = $egs->generateNewKeysAndCSR('Qr');
 
-// Issue a new compliance cert for the EGS
+// Issue a new compliance cert for the EGS (OTP comes from the Fatoora portal)
 list($request_id, $binary_security_token, $secret) = $egs->issueComplianceCertificate('123345', $csr);
 
 // Sign invoice
-list($signed_invoice_string, $invoice_hash, $qr) = $egs->signInvoice($invoice, $egs_unit, $binary_security_token, $private_key);
+list($signed_invoice_string, $invoice_hash, $qr, $invoice_uuid) = $egs->signInvoice($invoice, $egs_unit, $binary_security_token, $private_key);
 
-// Check invoice compliance
-// echo($egs->checkInvoiceCompliance($signed_invoice_string, $invoice_hash, $binary_security_token, $secret));
-// echo PHP_EOL;
+// Check invoice compliance — pass the per-invoice UUID that signInvoice() returned.
+// echo $egs->checkInvoiceCompliance($signed_invoice_string, $invoice_hash, $binary_security_token, $secret, $invoice_uuid), PHP_EOL;
+
+// Once every compliance check passes, swap the compliance CSID for a production one:
+// list($request_id, $production_certificate, $production_secret) = $egs->issueProductionCertificate($request_id, $binary_security_token, $secret);
+// echo $egs->reportInvoice($signed_invoice_string, $invoice_hash, $production_certificate, $production_secret, $invoice_uuid), PHP_EOL;
 
 // Generate QR Code
 $qrCode = QrCode::create($qr)
@@ -91,7 +98,6 @@ $qrCode = QrCode::create($qr)
     ->setForegroundColor(new Color(0, 0, 0))
     ->setBackgroundColor(new Color(255, 255, 255));
 
-// Save QR Code to file
 $writer = new PngWriter();
 $logo = Logo::create(__DIR__ . '/assets/logo.png')
     ->setResizeToWidth(50)
@@ -101,8 +107,20 @@ $label = Label::create('Qr Phase-2')
     ->setTextColor(new Color(255, 0, 0));
 
 $result = $writer->write($qrCode, $logo, $label);
-$result->saveToFile(__DIR__ . '/assets/phase-2.png');
+
+// Save QR Code to file
+if (!is_dir(__DIR__ . '/tmp')) {
+    mkdir(__DIR__ . '/tmp', 0755, true);
+}
+$result->saveToFile(__DIR__ . '/tmp/phase-2.png');
+
+if (PHP_SAPI === 'cli') {
+    echo "Invoice UUID: {$invoice_uuid}\n";
+    echo "Invoice hash: {$invoice_hash}\n";
+    echo "QR (Base64 TLV): {$qr}\n";
+    echo "QR image written to tmp/phase-2.png\n";
+    return;
+}
 
 header('Content-Type: ' . $result->getMimeType());
-
 echo $result->getString();

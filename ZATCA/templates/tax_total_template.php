@@ -2,21 +2,21 @@
 
 $tax_total = <<<XML
 <cac:TaxTotal>
-        <cbc:TaxAmount currencyID="SAR">__158.67</cbc:TaxAmount>__TaxSubtotal
+        <cbc:TaxAmount currencyID="SAR">SET_TAX_TOTAL_AMOUNT_1</cbc:TaxAmount>SET_TAX_SUBTOTALS
     </cac:TaxTotal>
     <cac:TaxTotal>
-        <cbc:TaxAmount currencyID="SAR">___tax_amount</cbc:TaxAmount>
+        <cbc:TaxAmount currencyID="SAR">SET_TAX_TOTAL_AMOUNT_2</cbc:TaxAmount>
     </cac:TaxTotal>
 XML;
 
 $tax_sub_total = <<<XML
 
         <cac:TaxSubtotal>
-            <cbc:TaxableAmount currencyID="SAR">46.00</cbc:TaxableAmount>
-            <cbc:TaxAmount currencyID="SAR">_6.89</cbc:TaxAmount>
+            <cbc:TaxableAmount currencyID="SAR">SET_TAXABLE_AMOUNT</cbc:TaxableAmount>
+            <cbc:TaxAmount currencyID="SAR">SET_SUBTOTAL_TAX_AMOUNT</cbc:TaxAmount>
             <cac:TaxCategory>
-                <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5305">__S</cbc:ID>
-                <cbc:Percent>15.00</cbc:Percent>
+                <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5305">SET_TAX_CATEGORY_ID</cbc:ID>
+                <cbc:Percent>SET_TAX_CATEGORY_PERCENT</cbc:Percent>
                 <cac:TaxScheme>
                     <cbc:ID schemeAgencyID="6" schemeID="UN/ECE 5153">VAT</cbc:ID>
                 </cac:TaxScheme>

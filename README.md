@@ -21,9 +21,9 @@ This repository is a maintained fork of the PHP port by **[Nady Shalaby](https:/
 
 ## Requirements
 
-- PHP **8.1+** with `ext-dom`
-- The **`openssl` binary** available on the system (`shell_exec` is used for key/CSR generation in the EGS flow)
-- `endroid/qr-code` ^5.0 (installed by Composer)
+- PHP **8.1+** with `ext-dom`, `ext-openssl`, `ext-curl` and `ext-json`
+- No `openssl` binary and no `shell_exec`: keys, CSRs and signatures all go through `ext-openssl`
+- `endroid/qr-code` ^5.0 — optional, only to render the QR image (the library returns the Base64 TLV string)
 
 ## Install
 
@@ -56,16 +56,48 @@ $base64TLV = GenerateQrCode::fromArray([
 // Feed $base64TLV to any QR renderer (see phase-1.php for endroid/qr-code usage)
 ```
 
+The TLV length field is a single byte, so no field may exceed **255 bytes** — an Arabic
+character is 2 bytes. An over-long value raises a `LengthException` instead of producing
+a QR that cannot be parsed.
+
 ## Quick start — Phase 2 (onboarding, signing, reporting)
 
 See the runnable example in [`phase-2.php`](phase-2.php) and the **Arabic step-by-step guide in `docs/`**. The flow:
 
-1. Build the `EGS` unit info (VAT number, CRN, branch, location…)
-2. `generateNewKeysAndCSR()` → secp256k1 private key + CSR
-3. Compliance CSID (with the OTP from the Fatoora portal) → run compliance checks → Production CSID
-4. Create the invoice → `sign()` → report to ZATCA
+```php
+use ZATCA\EGS;
+
+// EGS::ENV_SANDBOX (developer portal) · EGS::ENV_SIMULATION · EGS::ENV_PRODUCTION
+$egs = new EGS($egs_unit, EGS::ENV_SANDBOX);
+
+// 1. secp256k1 key (generated in memory, never written to disk) + CSR
+[$private_key, $csr] = $egs->generateNewKeysAndCSR('My Solution');
+
+// 2. Compliance CSID, using the OTP from the Fatoora portal
+[$request_id, $certificate, $secret] = $egs->issueComplianceCertificate($otp, $csr);
+
+// 3. Sign the invoice. Each invoice gets its own UUID — keep it, ZATCA wants it with the invoice.
+[$signed_xml, $invoice_hash, $qr, $invoice_uuid] = $egs->signInvoice($invoice, $egs_unit, $certificate, $private_key);
+
+// 4. Compliance checks → production CSID → report
+echo $egs->checkInvoiceCompliance($signed_xml, $invoice_hash, $certificate, $secret, $invoice_uuid);
+[$request_id, $production_certificate, $production_secret] = $egs->issueProductionCertificate($request_id, $certificate, $secret);
+echo $egs->reportInvoice($signed_xml, $invoice_hash, $production_certificate, $production_secret, $invoice_uuid);
+```
+
+The environment picks both the gateway and the code-signing template baked into the CSR
+(`TSTZATCA-` / `PREZATCA-` / `ZATCA-Code-Signing`), so the two can no longer drift apart.
 
 **Always start against the ZATCA sandbox/simulation environment before production.**
+
+## Tests
+
+```bash
+php tests/run.php     # or: composer test
+```
+
+No dev dependencies needed — the suite covers the TLV encoding, invoice construction,
+XML escaping, the cryptographic stamp and the EGS onboarding flow.
 
 ## Disclaimer
 
@@ -77,5 +109,5 @@ checks for your own EGS before going live. No warranty — see LICENSE.
 
 - Packagist release and semantic versioning
 - Practical Arabic documentation for Phase-2 scenarios (credit notes, cancellation, B2B standard invoices)
-- Replacing `shell_exec` openssl calls with `ext-openssl` where feasible
-- Tests for TLV output against ZATCA's published examples
+- B2B standard invoice (clearance) support beyond the current `API::clearInvoice()` endpoint
+- Validating the generated UBL against ZATCA's XSD and schematron rules
