@@ -82,27 +82,49 @@ class Tag
      */
     public function __toString()
     {
-        return $this->toByte($this->getTag())
-            . $this->toByte($this->getLength())
+        return $this->toTagByte()
+            . $this->toLengthByte()
             . $this->getValue();
     }
 
     /**
-     * Encode a tag or length as the single unsigned byte ZATCA mandates.
-     *
-     * @param  int  $value
+     * Encode the tag as the single unsigned byte ZATCA mandates.
      *
      * @return string
      *
-     * @throws LengthException If the value cannot be held in one byte.
+     * @throws LengthException If the tag cannot be held in one byte.
      */
-    protected function toByte($value)
+    protected function toTagByte()
     {
-        if ($value < 0 || $value > self::MAX_VALUE_LENGTH) {
+        $tag = $this->getTag();
+
+        if ($tag < 0 || $tag > self::MAX_VALUE_LENGTH) {
+            throw new LengthException(sprintf(
+                'Tag id %d is out of range, ZATCA stores the tag in a single byte (0 to %d).',
+                $tag,
+                self::MAX_VALUE_LENGTH
+            ));
+        }
+
+        return chr($tag);
+    }
+
+    /**
+     * Encode the value length as the single unsigned byte ZATCA mandates.
+     *
+     * @return string
+     *
+     * @throws LengthException If the value is too long for one length byte.
+     */
+    protected function toLengthByte()
+    {
+        $length = $this->getLength();
+
+        if ($length > self::MAX_VALUE_LENGTH) {
             throw new LengthException(sprintf(
                 'Tag %d: value is %d bytes once UTF-8 encoded, but ZATCA stores the TLV length in a single byte (max %d). %s',
                 $this->getTag(),
-                $value,
+                $length,
                 self::MAX_VALUE_LENGTH,
                 $this->fallback === null
                     ? 'Pass a shorter fallback value, such as the English trade name on the VAT certificate.'
@@ -110,6 +132,6 @@ class Tag
             ));
         }
 
-        return chr($value);
+        return chr($length);
     }
 }

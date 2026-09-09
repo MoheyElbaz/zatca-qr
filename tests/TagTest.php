@@ -181,6 +181,7 @@ class TagTest extends TestCase
     public function test_tag_number_is_also_bounded(): void
     {
         $this->expectException(LengthException::class);
+        $this->expectExceptionMessageMatches('/Tag id 256 is out of range/');
 
         (string) new Tag(256, 'x');
     }
