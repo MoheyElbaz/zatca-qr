@@ -178,6 +178,44 @@ class TagTest extends TestCase
         (string) new Seller(str_repeat('ش', 130), str_repeat('a', 256));
     }
 
+    /**
+     * A zero-rated or exempt invoice legitimately carries "0". A falsy check
+     * would emit the tag with length 0 and no value, which ZATCA rejects.
+     *
+     * @dataProvider zeroValues
+     */
+    public function test_it_encodes_zero_values(string $value): void
+    {
+        $tag = (string) new InvoiceTaxAmount($value);
+
+        $this->assertSame($value, $this->decodeTlv($tag)[5]);
+        $this->assertSame(strlen($value), ord($tag[1]));
+    }
+
+    public static function zeroValues(): array
+    {
+        return [
+            'bare zero' => ['0'],
+            'zero with decimals' => ['0.00'],
+            'zero float string' => ['0.0'],
+        ];
+    }
+
+    public function test_an_empty_value_is_still_encoded_as_empty(): void
+    {
+        $tag = (string) new Seller('');
+
+        $this->assertSame('0100', strtolower(bin2hex($tag)));
+    }
+
+    public function test_a_blank_fallback_is_not_used_in_place_of_the_name(): void
+    {
+        $this->expectException(LengthException::class);
+        $this->expectExceptionMessageMatches('/fallback is empty/');
+
+        (string) new Seller(str_repeat('ش', 130), '   ');
+    }
+
     public function test_tag_number_is_also_bounded(): void
     {
         $this->expectException(LengthException::class);

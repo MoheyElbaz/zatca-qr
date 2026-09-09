@@ -243,22 +243,25 @@ class ZATCASimplifiedTaxInvoice
         return base64_encode($qr_tlv);
     }
 
+    /**
+     * Encode the Phase-2 QR fields as TLV.
+     *
+     * This used to carry its own copy of the encoder, which built the length
+     * with pack('H*', sprintf('%02X', $length)) and so emitted two bytes once a
+     * field reached 256 — the same malformed QR that Tag now rejects on the
+     * Phase-1 path. Routing through Tag keeps one implementation of the rule.
+     *
+     * @throws \LengthException If a field is too long for its single length byte.
+     */
     private function TLV(array $tags): string
     {
-        $__toHex = function ($value) {
-            return pack('H*', sprintf('%02X', $value));
-        };
+        $parts = [];
 
-        $__toString = function ($__tag, $__value, $__length) use ($__toHex) {
-            $value = (string)$__value;
-            return $__toHex($__tag) . $__toHex($__length) . $value;
-        };
+        foreach (array_values($tags) as $i => $value) {
+            $parts[] = (string) new Tag($i + 1, $value);
+        }
 
-        foreach ($tags as $i => $tag)
-            $__TLVS[] = $__toString($i + 1, $tag, strlen($tag));
-
-
-        return implode('', $__TLVS) ?? '';
+        return implode('', $parts);
     }
 
     public function defaultUBLExtensionsSignedPropertiesForSigning(array $signed_properties_props): string

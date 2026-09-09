@@ -15,6 +15,13 @@ class Tag
      */
     const MAX_VALUE_LENGTH = 255;
 
+    /**
+     * The tag is stored in a single byte too. Kept separate from
+     * MAX_VALUE_LENGTH so that narrowing one limit later cannot silently
+     * narrow the other.
+     */
+    const MAX_TAG = 255;
+
     protected $tag;
 
     protected $value;
@@ -45,7 +52,8 @@ class Tag
     public function usedFallback()
     {
         return $this->fallback !== null
-            && strlen($this->value ?: "") > self::MAX_VALUE_LENGTH;
+            && trim((string) $this->fallback) !== ""
+            && strlen($this->value === null ? "" : (string) $this->value) > self::MAX_VALUE_LENGTH;
     }
 
     /**
@@ -61,7 +69,14 @@ class Tag
      */
     public function getValue()
     {
-        return $this->usedFallback() ? $this->fallback : ($this->value ?: "");
+        if ($this->usedFallback()) {
+            return (string) $this->fallback;
+        }
+
+        // "0" is a legitimate value for a zero-rated or exempt invoice, so only
+        // null is treated as absent. A falsy check here would emit tag 5 with
+        // length 0 and no value at all, which ZATCA rejects.
+        return $this->value === null ? "" : (string) $this->value;
     }
 
     /**
@@ -98,15 +113,33 @@ class Tag
     {
         $tag = $this->getTag();
 
-        if ($tag < 0 || $tag > self::MAX_VALUE_LENGTH) {
+        if ($tag < 0 || $tag > self::MAX_TAG) {
             throw new LengthException(sprintf(
                 'Tag id %d is out of range, ZATCA stores the tag in a single byte (0 to %d).',
                 $tag,
-                self::MAX_VALUE_LENGTH
+                self::MAX_TAG
             ));
         }
 
         return chr($tag);
+    }
+
+    /**
+     * Explains, in the exception, why the fallback did not rescue this tag.
+     *
+     * @return string
+     */
+    protected function fallbackHint()
+    {
+        if ($this->fallback === null) {
+            return 'Pass a shorter fallback value, such as the English trade name on the VAT certificate.';
+        }
+
+        if (trim((string) $this->fallback) === '') {
+            return 'The fallback is empty, so it was not used.';
+        }
+
+        return 'The fallback does not fit either.';
     }
 
     /**
@@ -126,9 +159,7 @@ class Tag
                 $this->getTag(),
                 $length,
                 self::MAX_VALUE_LENGTH,
-                $this->fallback === null
-                    ? 'Pass a shorter fallback value, such as the English trade name on the VAT certificate.'
-                    : 'The fallback does not fit either.'
+                $this->fallbackHint()
             ));
         }
 
