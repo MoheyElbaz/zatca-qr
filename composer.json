@@ -23,5 +23,16 @@
             "ZATCA\\": "ZATCA/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "ZATCA\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
     "minimum-stability": "stable"
 }
