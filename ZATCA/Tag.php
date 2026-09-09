@@ -97,9 +97,11 @@ class Tag
      */
     public function __toString()
     {
+        $value = $this->getValue();
+
         return $this->toTagByte()
-            . $this->toLengthByte()
-            . $this->getValue();
+            . $this->toLengthByte($value)
+            . $value;
     }
 
     /**
@@ -145,13 +147,19 @@ class Tag
     /**
      * Encode the value length as the single unsigned byte ZATCA mandates.
      *
+     * @param  string  $value  The exact string being written.
+     *
      * @return string
      *
      * @throws LengthException If the value is too long for one length byte.
      */
-    protected function toLengthByte()
+    protected function toLengthByte($value)
     {
-        $length = $this->getLength();
+        // Measured from the string __toString() is about to emit, not from a
+        // second getValue() call: an override that is not idempotent would
+        // otherwise declare a length for one string and write another,
+        // misaligning every tag that follows.
+        $length = strlen($value);
 
         if ($length > self::MAX_VALUE_LENGTH) {
             throw new LengthException(sprintf(
