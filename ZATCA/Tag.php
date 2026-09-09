@@ -19,10 +19,33 @@ class Tag
 
     protected $value;
 
-    public function __construct($tag, $value)
+    protected $fallback;
+
+    /**
+     * @param  int  $tag
+     * @param  string  $value
+     * @param  string|null  $fallback  Used in place of $value when $value does
+     *         not fit in the single length byte. For tag 1 this is the English
+     *         trade name from the VAT certificate: an Arabic letter is two
+     *         bytes in UTF-8, so a long registered name can overflow while its
+     *         English equivalent fits.
+     */
+    public function __construct($tag, $value, $fallback = null)
     {
         $this->tag = $tag;
         $this->value = $value;
+        $this->fallback = $fallback;
+    }
+
+    /**
+     * Whether the fallback is standing in for the original value.
+     *
+     * @return bool
+     */
+    public function usedFallback()
+    {
+        return $this->fallback !== null
+            && strlen($this->value ?: "") > self::MAX_VALUE_LENGTH;
     }
 
     /**
@@ -38,7 +61,7 @@ class Tag
      */
     public function getValue()
     {
-        return $this->value ?: "";
+        return $this->usedFallback() ? $this->fallback : ($this->value ?: "");
     }
 
     /**
@@ -77,10 +100,13 @@ class Tag
     {
         if ($value < 0 || $value > self::MAX_VALUE_LENGTH) {
             throw new LengthException(sprintf(
-                'Tag %d: value is %d bytes once UTF-8 encoded, but ZATCA stores the TLV length in a single byte (max %d). Shorten the field before generating the QR code.',
+                'Tag %d: value is %d bytes once UTF-8 encoded, but ZATCA stores the TLV length in a single byte (max %d). %s',
                 $this->getTag(),
                 $value,
-                self::MAX_VALUE_LENGTH
+                self::MAX_VALUE_LENGTH,
+                $this->fallback === null
+                    ? 'Pass a shorter fallback value, such as the English trade name on the VAT certificate.'
+                    : 'The fallback does not fit either.'
             ));
         }
 

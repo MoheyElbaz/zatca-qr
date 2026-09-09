@@ -148,6 +148,36 @@ class TagTest extends TestCase
         $this->assertLessThanOrEqual(700, strlen($base64), 'ZATCA caps the QR payload at 700 characters');
     }
 
+    public function test_it_falls_back_to_the_english_name_when_the_arabic_is_too_long(): void
+    {
+        $arabic = str_repeat('ش', 130);   // 260 bytes
+        $english = 'Al Waed Al Afdal Trading Co';
+
+        $this->assertGreaterThan(Tag::MAX_VALUE_LENGTH, strlen($arabic), 'sanity: the Arabic name overflows');
+
+        $tag = new Seller($arabic, $english);
+
+        $this->assertTrue($tag->usedFallback());
+        $this->assertSame($english, $this->decodeTlv((string) $tag)[1]);
+    }
+
+    public function test_it_keeps_the_arabic_name_when_it_fits(): void
+    {
+        $arabic = 'شركة الواعد الافضل';
+        $tag = new Seller($arabic, 'Al Waed Al Afdal Trading Co');
+
+        $this->assertFalse($tag->usedFallback(), 'the fallback must not be used when the Arabic fits');
+        $this->assertSame($arabic, $this->decodeTlv((string) $tag)[1]);
+    }
+
+    public function test_it_still_throws_when_the_fallback_also_overflows(): void
+    {
+        $this->expectException(LengthException::class);
+        $this->expectExceptionMessageMatches('/fallback does not fit/');
+
+        (string) new Seller(str_repeat('ش', 130), str_repeat('a', 256));
+    }
+
     public function test_tag_number_is_also_bounded(): void
     {
         $this->expectException(LengthException::class);
