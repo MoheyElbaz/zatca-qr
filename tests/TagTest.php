@@ -216,6 +216,28 @@ class TagTest extends TestCase
         (string) new Seller(str_repeat('ش', 130), '   ');
     }
 
+    /**
+     * __toString() must measure the exact string it writes. Taking the length
+     * from a second getValue() call let a non-idempotent override declare one
+     * length and emit another, misaligning every following tag.
+     */
+    public function test_it_measures_the_same_call_it_writes(): void
+    {
+        $tag = new class(1, 'ignored') extends Tag
+        {
+            private int $calls = 0;
+
+            public function getValue()
+            {
+                return str_repeat('x', 10 - (2 * $this->calls++));
+            }
+        };
+
+        $encoded = (string) $tag;
+
+        $this->assertSame(strlen($encoded) - 2, ord($encoded[1]));
+    }
+
     public function test_tag_number_is_also_bounded(): void
     {
         $this->expectException(LengthException::class);
