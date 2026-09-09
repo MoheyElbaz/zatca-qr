@@ -56,6 +56,23 @@ $base64TLV = GenerateQrCode::fromArray([
 // Feed $base64TLV to any QR renderer (see phase-1.php for endroid/qr-code usage)
 ```
 
+### Long Arabic trade names
+
+ZATCA stores each TLV length in a single byte, so a field can hold at most 255
+bytes. An Arabic letter is two bytes in UTF-8, so a registered name of about 128
+characters or more will not fit and `Seller` throws a `LengthException`.
+
+Pass the English trade name from the VAT certificate as a second argument. It is
+used **only** when the Arabic name overflows:
+
+```php
+new Seller('الاسم العربي الطويل جدا ...', 'Al Waed Al Afdal Trading Co');
+```
+
+Use the name as registered with ZATCA. Do not machine-translate or transliterate
+it — the QR is read back against the certificate, so an invented name will not
+match. Call `$seller->usedFallback()` if you need to log which name was encoded.
+
 ## Quick start — Phase 2 (onboarding, signing, reporting)
 
 See the runnable example in [`phase-2.php`](phase-2.php) and the **Arabic step-by-step guide in `docs/`**. The flow:

@@ -106,3 +106,5 @@ dist
 /tmp
 .idea
 vendor/
+# PHPUnit
+.phpunit.result.cache
